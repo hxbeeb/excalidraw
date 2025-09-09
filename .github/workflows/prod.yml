@@ -1,0 +1,44 @@
+name: Deploy to EC2
+on:
+  push:
+    branches:
+      - prod
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+         
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.PROD_HOST }}
+          username: ubuntu
+          key: ${{ secrets.PROD_PRIVATE_KEY }}
+          port: 22
+          script: |
+            
+            # Create directory if it doesn't exist
+            if [ ! -d "excalidraw" ]; then
+              echo "Cloning repository..."
+              git clone https://github.com/hxbeeb/excalidraw.git excalidraw
+            fi
+            
+            # Navigate to application directory
+            cd excalidraw
+            
+            # Pull latest changes
+            git pull origin prod
+            
+            # Install/update dependencies
+            npm install
+
+            # Stop existing PM2 process if running
+            pm2 stop excalidraw 2>/dev/null || true
+            pm2 delete excalidraw 2>/dev/null || true
+            
+            # Start the application
+            pm2 start npm --name "excalidraw" -- run dev
+          
