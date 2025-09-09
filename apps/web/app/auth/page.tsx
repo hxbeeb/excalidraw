@@ -31,7 +31,7 @@ export default function AuthPage() {
                 ? { email: formData.email, password: formData.password }
                 : { name: formData.name, email: formData.email, password: formData.password };
 
-            const response = await fetch(`http://localhost:3000${endpoint}`, {
+            const response = await fetch(`https://excalidraw-http.habeebsaleh.dev${endpoint}`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

@@ -81,7 +81,7 @@ export default function CanvasPage() {
 
         try {
             // Connect to WebSocket
-            const ws = new WebSocket(`ws://localhost:8080?token=${token}`);
+            const ws = new WebSocket(`wss://excalidraw-ws.habeebsaleh.dev?token=${token}`);
             
             ws.onopen = () => {
                 console.log("WebSocket connected from canvas page");

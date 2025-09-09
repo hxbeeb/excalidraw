@@ -69,7 +69,7 @@ export default function RoomPage({params}:{params:Promise<{roomId:string}>}){
             return;
         }
 
-        const ws = new WebSocket(`ws://localhost:8080?token=${token}`);
+        const ws = new WebSocket(`wss://excalidraw-ws.habeebsaleh.dev?token=${token}`);
         wsRef.current = ws;
 
         ws.onopen = () => {

@@ -157,7 +157,7 @@ export default function CanvasRoomPage() {
       console.log("Token being sent:", token);
       console.log("Token length:", token.length);
       
-      const response = await fetch(`http://localhost:3000/drawings/${roomSlug}`, {
+      const response = await fetch(`https://excalidraw-http.habeebsaleh.dev/drawings/${roomSlug}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -410,7 +410,7 @@ export default function CanvasRoomPage() {
       return;
     }
 
-    const ws = new WebSocket(`ws://localhost:8080?token=${token}`);
+    const ws = new WebSocket(`wss://excalidraw-ws.habeebsaleh.dev?token=${token}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
