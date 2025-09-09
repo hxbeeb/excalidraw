@@ -38,7 +38,9 @@ jobs:
             # Stop existing PM2 process if running
             pm2 stop excalidraw 2>/dev/null || true
             pm2 delete excalidraw 2>/dev/null || true
+
+            pnpm build
             
             # Start the application
-            pm2 start pnpm --name "excalidraw" -- run dev
+            pm2 start pnpm --name "excalidraw" -- run start 
           
