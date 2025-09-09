@@ -33,7 +33,7 @@ jobs:
             git pull origin main
             
             # Install/update dependencies
-            npm install
+            pnpm install
 
             # Stop existing PM2 process if running
             pm2 stop excalidraw 2>/dev/null || true
