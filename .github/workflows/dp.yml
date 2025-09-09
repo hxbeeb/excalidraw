@@ -23,7 +23,7 @@ jobs:
             # Create directory if it doesn't exist
             if [ ! -d "excalidraw" ]; then
               echo "Cloning repository..."
-              git clone https://github.com/hxbeeb/excalidraw.git algocode
+              git clone https://github.com/hxbeeb/excalidraw.git excalidraw
             fi
             
             # Navigate to application directory
