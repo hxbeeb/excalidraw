@@ -40,5 +40,5 @@ jobs:
             pm2 delete excalidraw 2>/dev/null || true
             
             # Start the application
-            pm2 start npm --name "excalidraw" -- run dev
+            pm2 start pnpm --name "excalidraw" -- run dev
           
