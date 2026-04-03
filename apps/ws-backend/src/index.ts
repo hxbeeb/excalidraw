@@ -55,10 +55,9 @@ function verifyToken(token: string): boolean {
     }
 }
 
-const wss = new WebSocketServer({ 
+const wss = new WebSocketServer({
+  host: "0.0.0.0",
   port: 8080,
-  // Optional: Add verifyClient to reject connections before they're established
-  
 });
 
 console.log("WebSocket Server is running on port 8080");
@@ -179,18 +178,19 @@ wss.on("connection", async (ws, req) => {
             return;
           }
           
-          // Check if room exists in database
-          const room = await prisma.room.findUnique({
+          // Check if room exists in database, create if it doesn't
+          let room = await prisma.room.findUnique({
             where: { slug: parsedMessage.roomName }
           });
-          
+
           if (!room) {
-            ws.send(JSON.stringify({
-              type: "error",
-              message: "Room not found",
-              timestamp: new Date().toISOString()
-            }));
-            return;
+            room = await prisma.room.create({
+              data: {
+                slug: parsedMessage.roomName,
+                adminId: currentUser.userId
+              }
+            });
+            console.log("Room auto-created:", parsedMessage.roomName);
           }
           
           // Add room to user's rooms list if not already there
@@ -264,9 +264,44 @@ wss.on("connection", async (ws, req) => {
        }
 
       else if(parsedMessage.type==="leave-room"){
-        const room=users.find(user=>user.userId===parsedMessage.userId);
-        if(room){
-          room.rooms=room.rooms.filter(room=>room!==parsedMessage.roomName);
+        const currentUser = users.find(user => user.ws === ws);
+        if (currentUser && parsedMessage.roomName) {
+          currentUser.rooms = currentUser.rooms.filter(r => r !== parsedMessage.roomName);
+
+          // Notify others
+          const userLeftMessage = JSON.stringify({
+            type: "user-left",
+            roomName: parsedMessage.roomName,
+            userId: currentUser.userId,
+            timestamp: new Date().toISOString()
+          });
+          users.forEach(u => {
+            if (u.rooms.includes(parsedMessage.roomName)) {
+              u.ws.send(userLeftMessage);
+            }
+          });
+
+          // Auto-delete room if no one is left
+          const remainingUsers = users.filter(u => u.rooms.includes(parsedMessage.roomName));
+          if (remainingUsers.length === 0) {
+            try {
+              const room = await prisma.room.findUnique({ where: { slug: parsedMessage.roomName } });
+              if (room) {
+                await prisma.$executeRaw`DELETE FROM "DrawingAction" WHERE "roomId" = ${room.id}`;
+                await prisma.$executeRaw`DELETE FROM "Chat" WHERE "roomId" = ${room.id}`;
+                await prisma.room.delete({ where: { id: room.id } });
+                console.log("Auto-deleted empty room:", parsedMessage.roomName);
+              }
+            } catch (err) {
+              console.error("Error auto-deleting room:", parsedMessage.roomName, err);
+            }
+          }
+
+          ws.send(JSON.stringify({
+            type: "response",
+            message: "Room left successfully",
+            timestamp: new Date().toISOString()
+          }));
         }
       }
              else if(parsedMessage.type==="send-message"){
@@ -598,32 +633,18 @@ wss.on("connection", async (ws, req) => {
             return;
           }
           
-          // Store drawing action in database using direct SQL
-          try {
-            await prisma.$executeRaw`
-              INSERT INTO "DrawingAction" (type, points, color, "strokeWidth", "userId", "roomId", "createdAt")
-              VALUES (${parsedMessage.action.type}, ${JSON.stringify(parsedMessage.action.points)}::jsonb, ${parsedMessage.action.color}, ${parsedMessage.action.strokeWidth}, ${currentUser.userId}, ${room.id}, NOW())
-            `;
-            console.log("Drawing action saved to database");
-          } catch (dbError) {
-            console.error("Error saving drawing action to database:", dbError);
-            // Continue with broadcasting even if database save fails
+          // Only save complete strokes (type "end") to the database
+          if (parsedMessage.action.type === "end" && parsedMessage.action.points?.length > 0) {
+            try {
+              await prisma.$executeRaw`
+                INSERT INTO "DrawingAction" (type, points, color, "strokeWidth", "userId", "roomId", "createdAt")
+                VALUES ('stroke', ${JSON.stringify(parsedMessage.action.points)}::jsonb, ${parsedMessage.action.color}, ${parsedMessage.action.strokeWidth}, ${currentUser.userId}, ${room.id}, NOW())
+              `;
+              console.log("Complete stroke saved to database");
+            } catch (dbError) {
+              console.error("Error saving stroke to database:", dbError);
+            }
           }
-          
-          // Also store in memory for immediate access
-          const drawingAction: DrawingAction = {
-            id: Date.now().toString(),
-            type: parsedMessage.action.type,
-            points: parsedMessage.action.points,
-            color: parsedMessage.action.color,
-            strokeWidth: parsedMessage.action.strokeWidth,
-            userId: currentUser.userId,
-            userName: user.name,
-            roomName: parsedMessage.roomName,
-            timestamp: new Date().toISOString()
-          };
-          
-          addDrawingAction(drawingAction);
           
           // Broadcast drawing action to all users in the same room (except sender)
           const drawingMessage = JSON.stringify({
@@ -1083,23 +1104,24 @@ wss.on("connection", async (ws, req) => {
   ws.on("close", () => {
     console.log("Client disconnected");
     authenticatedConnections.delete(ws);
-    // Remove user from the users array
+    // Remove user from the users array but DON'T delete rooms
+    // Rooms only get deleted via explicit leave-room message
     const index = users.findIndex(user => user.ws === ws);
     if (index !== -1) {
       const removedUser = users[index];
       if (removedUser) {
         users.splice(index, 1);
         console.log("User removed from WebSocket users:", removedUser.userId);
-        
-        // Notify other users in the same rooms that this user left
-        removedUser.rooms.forEach(roomName => {
+
+        // Notify other users in the same rooms that this user's connection dropped
+        removedUser.rooms.forEach((roomName) => {
           const userLeftMessage = JSON.stringify({
             type: "user-left",
             roomName: roomName,
             userId: removedUser.userId,
             timestamp: new Date().toISOString()
           });
-          
+
           users.forEach(user => {
             if (user.rooms.includes(roomName)) {
               user.ws.send(userLeftMessage);

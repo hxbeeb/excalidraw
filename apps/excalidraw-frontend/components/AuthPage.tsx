@@ -28,7 +28,7 @@ export default function AuthPage({ isSignin }: { isSignin: boolean }) {
         setError("");
         
         try {
-            const response = await fetch("https://excalidraw-http.habeebsaleh.dev/login", {
+            const response = await fetch(`http://${window.location.hostname}:3000/login`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -67,7 +67,7 @@ export default function AuthPage({ isSignin }: { isSignin: boolean }) {
         setError("");
         
         try {
-            const response = await fetch("https://excalidraw-http.habeebsaleh.dev/signup", {
+            const response = await fetch(`http://${window.location.hostname}:3000/signup`, {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",

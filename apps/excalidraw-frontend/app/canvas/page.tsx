@@ -16,14 +16,20 @@ export default function CanvasPage() {
     const [user, setUser] = useState<User | null>(null);
     const [loading, setLoading] = useState(true);
     const [isConnecting, setIsConnecting] = useState(false);
-    const [wsConnection, setWsConnection] = useState<WebSocket | null>(null);
     const router = useRouter();
 
     useEffect(() => {
+        // If user is still in a room, redirect back
+        const inRoom = localStorage.getItem("inRoom");
+        if (inRoom) {
+            router.push(`/canvas/${inRoom}`);
+            return;
+        }
+
         // Check if user is authenticated
         const token = localStorage.getItem("token");
         const userData = localStorage.getItem("user");
-        
+
         if (!token || !userData) {
             router.push("/signin");
             return;
@@ -49,10 +55,6 @@ export default function CanvasPage() {
             if (lastRoom) {
                 console.log("Auto-rejoining last room:", lastRoom);
                 setRoomId(lastRoom);
-                // Auto-join after a short delay
-                setTimeout(() => {
-                    handleJoinRoom();
-                }, 500);
             }
         }
     }, [loading, user]);
@@ -63,8 +65,8 @@ export default function CanvasPage() {
         router.push("/signin");
     };
 
-    const handleJoinRoom = async () => {
-        if (!roomId.trim()) {
+    const joinWithRoomName = (name: string) => {
+        if (!name.trim()) {
             setError("Please enter a room name");
             return;
         }
@@ -79,67 +81,20 @@ export default function CanvasPage() {
         setIsConnecting(true);
         setError("");
 
-        try {
-            // Connect to WebSocket
-            const ws = new WebSocket(`wss://excalidraw-ws.habeebsaleh.dev?token=${token}`);
-            
-            ws.onopen = () => {
-                console.log("WebSocket connected from canvas page");
-                setWsConnection(ws);
-                
-                // Store connection globally for room page to use
-                (window as any).__wsConnection = ws;
-                
-                // Don't send join message here - wait for welcome message first
-            };
+        // Navigate directly to the room page — it handles its own WS connection
+        router.push(`/canvas/${name.trim()}`);
+    };
 
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                console.log("Received message:", data);
-
-                if (data.type === "welcome") {
-                    console.log("Welcome message received, joining room...");
-                    // After welcome message, send join room request
-                    const joinMessage = {
-                        type: "join-room",
-                        roomName: roomId.trim()
-                    };
-                    ws.send(JSON.stringify(joinMessage));
-                } else if (data.type === "response" && data.message === "Room joined successfully") {
-                    console.log("Successfully joined room:", roomId.trim());
-                    setIsConnecting(false);
-                    // Navigate to room page after successful join
-                    router.push(`/canvas/${roomId.trim()}`);
-                } else if (data.type === "error") {
-                    setError(`Error: ${data.message}`);
-                    setIsConnecting(false);
-                    ws.close();
-                }
-            };
-
-            ws.onerror = (error) => {
-                console.error("WebSocket error:", error);
-                setError("Failed to connect to drawing server");
-                setIsConnecting(false);
-            };
-
-            ws.onclose = () => {
-                console.log("WebSocket disconnected");
-                setWsConnection(null);
-                setIsConnecting(false);
-            };
-
-        } catch (error) {
-            console.error("Error connecting to WebSocket:", error);
-            setError("Failed to connect to drawing server");
-            setIsConnecting(false);
-        }
+    const handleJoinRoom = () => {
+        joinWithRoomName(roomId);
     };
 
     const handleCreateRandomRoom = () => {
-        // Generate a random room ID
+        // Generate a random room ID and auto-join
         const randomId = Math.random().toString(36).substring(2, 8);
         setRoomId(randomId);
+        // Join directly with the generated ID since setRoomId won't update immediately
+        joinWithRoomName(randomId);
     };
 
     if (loading) {

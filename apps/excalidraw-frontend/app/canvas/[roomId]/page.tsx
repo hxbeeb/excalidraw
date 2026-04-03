@@ -53,13 +53,14 @@ export default function CanvasRoomPage() {
   const [drawingHistoryFetched, setDrawingHistoryFetched] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [canvasInitRetryCount, setCanvasInitRetryCount] = useState(0);
-  const [currentPath, setCurrentPath] = useState<Point[]>([]);
+  const currentPathRef = useRef<Point[]>([]);
   const [canvasState, setCanvasState] = useState<ImageData | null>(null);
-  const [lastCanvasSize, setLastCanvasSize] = useState<{width: number, height: number} | null>(null);
      const [messages, setMessages] = useState<Message[]>([]);
    const [chatInput, setChatInput] = useState("");
    const chatContainerRef = useRef<HTMLDivElement>(null);
    const [isRoomAdmin, setIsRoomAdmin] = useState(false);
+   const [mobilePanel, setMobilePanel] = useState<"none" | "users" | "chat">("none");
+   const [wsError, setWsError] = useState("");
 
   // Function to save canvas state
   const saveCanvasState = () => {
@@ -90,53 +91,19 @@ export default function CanvasRoomPage() {
     }
   };
 
-  // Debounced resize handler
-  const debouncedResize = useCallback(() => {
-    const canvas = canvasRef.current;
-    const context = contextRef.current;
-    if (!canvas || !context) return;
+  // Fixed internal canvas resolution — same on all devices
+  const CANVAS_WIDTH = 1920;
+  const CANVAS_HEIGHT = 1080;
 
-    const container = canvas.parentElement;
-    if (container) {
-      // Calculate available space by subtracting header, toolbar, and sidebars
-      const headerHeight = 80; // Approximate header height
-      const toolbarHeight = 60; // Approximate toolbar height
-      const sidebarWidth = 256; // Left sidebar width (w-64 = 16rem = 256px)
-      const chatSidebarWidth = 320; // Right chat sidebar width (w-80 = 20rem = 320px)
-      const availableHeight = window.innerHeight - headerHeight - toolbarHeight;
-      const availableWidth = window.innerWidth - sidebarWidth - chatSidebarWidth;
-      
-      // Set fixed internal canvas size (400x400) and scale to fit container
-      const internalWidth = 400;
-      const internalHeight = 400;
-      
-      // Calculate scale to fit the available space
-      const scaleX = availableWidth / internalWidth;
-      const scaleY = availableHeight / internalHeight;
-      const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 1x
-      
-      // Set canvas internal size
-      canvas.width = internalWidth;
-      canvas.height = internalHeight;
-      
-      // Apply CSS transform to scale the canvas
-      canvas.style.transform = `scale(${scale})`;
-      canvas.style.transformOrigin = 'top left';
-      
-      // Update last known size
-      setLastCanvasSize({ width: availableWidth, height: availableHeight });
-      
-      // Restore context properties with proper stroke width scaling
-      context.lineCap = "round";
-      context.lineJoin = "round";
-      context.strokeStyle = currentColor;
-      // Use a stroke width that looks good on the 400x400 canvas
-      const baseStrokeWidth = 2; // Increased from 0.5 to 2 for better proportion on larger canvas
-      context.lineWidth = baseStrokeWidth;
-      
-      console.log("Canvas resized - Internal:", { width: internalWidth, height: internalHeight }, "Scale:", scale, "Available:", { width: availableWidth, height: availableHeight }, "Stroke width:", baseStrokeWidth);
-    }
-  }, [lastCanvasSize, currentColor]);
+  // Resize only re-applies context properties (internal size never changes)
+  const debouncedResize = useCallback(() => {
+    const context = contextRef.current;
+    if (!context) return;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.strokeStyle = currentColor;
+    context.lineWidth = strokeWidth;
+  }, [currentColor, strokeWidth]);
 
   // Function to fetch drawing history from HTTP backend
   const fetchDrawingHistory = async (roomSlug: string) => {
@@ -157,7 +124,8 @@ export default function CanvasRoomPage() {
       console.log("Token being sent:", token);
       console.log("Token length:", token.length);
       
-      const response = await fetch(`https://excalidraw-http.habeebsaleh.dev/drawings/${roomSlug}`, {
+      const httpHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+      const response = await fetch(`http://${httpHost}:3000/drawings/${roomSlug}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -182,33 +150,16 @@ export default function CanvasRoomPage() {
         // Mark as fetched to prevent repeated calls
         setDrawingHistoryFetched(true);
         
-        // Replay all drawing actions
-        drawingActions.forEach((action: any, index: number) => {
-          console.log(`Replaying action ${index}:`, action);
-          console.log("Action type:", action.type);
-          console.log("Action points:", action.points);
-          console.log("Action color:", action.color);
-          console.log("Action strokeWidth:", action.strokeWidth);
-          
-          // Check if points is a string that needs to be parsed
+        // Replay all saved strokes
+        drawingActions.forEach((action: any) => {
           let points = action.points;
           if (typeof points === 'string') {
-            try {
-              points = JSON.parse(points);
-              console.log("Parsed points from string:", points);
-            } catch (e) {
-              console.error("Failed to parse points:", e);
-              points = [];
-            }
+            try { points = JSON.parse(points); } catch { points = []; }
           }
-          
-          handleRemoteDrawing({
-            type: action.type,
+          replayStroke({
             points: points || [],
             color: action.color || "#000000",
             strokeWidth: action.strokeWidth || 2,
-            userId: action.userId,
-            userName: action.userName
           });
         });
       } else {
@@ -244,41 +195,9 @@ export default function CanvasRoomPage() {
 
       console.log("Initializing canvas");
 
-      // Set canvas size to fill the container
-      const resizeCanvas = () => {
-        const container = canvas.parentElement;
-        if (container) {
-          // Calculate available space by subtracting header, toolbar, and sidebars
-          const headerHeight = 80; // Approximate header height
-          const toolbarHeight = 60; // Approximate toolbar height
-          const sidebarWidth = 256; // Left sidebar width (w-64 = 16rem = 256px)
-          const chatSidebarWidth = 320; // Right chat sidebar width (w-80 = 20rem = 320px)
-          const availableHeight = window.innerHeight - headerHeight - toolbarHeight;
-          const availableWidth = window.innerWidth - sidebarWidth - chatSidebarWidth;
-          
-          // Set fixed internal canvas size (400x400) and scale to fit container
-          const internalWidth = 400;
-          const internalHeight = 400;
-          
-          // Calculate scale to fit the available space
-          const scaleX = availableWidth / internalWidth;
-          const scaleY = availableHeight / internalHeight;
-          const scale = Math.min(scaleX, scaleY, 1); // Don't scale up beyond 1x
-          
-          // Set canvas internal size
-          canvas.width = internalWidth;
-          canvas.height = internalHeight;
-          
-          // Apply CSS transform to scale the canvas
-          canvas.style.transform = `scale(${scale})`;
-          canvas.style.transformOrigin = 'top left';
-          
-          setLastCanvasSize({ width: availableWidth, height: availableHeight });
-          console.log("Canvas initialized - Internal:", { width: internalWidth, height: internalHeight }, "Scale:", scale, "Available:", { width: availableWidth, height: availableHeight });
-        }
-      };
-
-      resizeCanvas();
+      // Fixed internal resolution — CSS scales it to fit
+      canvas.width = CANVAS_WIDTH;
+      canvas.height = CANVAS_HEIGHT;
       
       // Use debounced resize handler for window resize events
       let resizeTimeout: NodeJS.Timeout;
@@ -297,12 +216,9 @@ export default function CanvasRoomPage() {
 
       context.lineCap = "round";
       context.lineJoin = "round";
-      context.strokeStyle = "#000000"; // Use explicit value instead of state
-      // Use a stroke width that looks good on the 400x400 canvas
-      const baseStrokeWidth = 2; // Increased from 0.5 to 2 for better proportion on larger canvas
-      context.lineWidth = baseStrokeWidth;
+      context.strokeStyle = "#000000";
+      context.lineWidth = 2;
       contextRef.current = context;
-      console.log("Canvas initialized successfully, context set:", contextRef.current, "Stroke width:", baseStrokeWidth);
 
       return () => {
         window.removeEventListener('resize', handleWindowResize);
@@ -394,47 +310,67 @@ export default function CanvasRoomPage() {
     }
   }, [roomId]);
 
-  // Check if we need to redirect to stored room
-  useEffect(() => {
-    const storedRoom = localStorage.getItem("currentRoom");
-    if (storedRoom && storedRoom !== roomId) {
-      console.log("Redirecting to stored room:", storedRoom);
-      router.push(`/canvas/${storedRoom}`);
-    }
-  }, [roomId, router]);
+  // No redirect to stored room — respect the URL the user navigated to
 
-  // Connect to WebSocket
-  const connectWebSocket = () => {
+  const reconnectTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+
+  // Connect to WebSocket with auto-reconnect
+  const connectWebSocket = useCallback(() => {
     if (!token) {
       alert("Please login first");
       return;
     }
 
-    const ws = new WebSocket(`wss://excalidraw-ws.habeebsaleh.dev?token=${token}`);
+    // Clean up existing connection
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.close();
+    }
+
+    // Use the same hostname the page was loaded from, so mobile works without cross-origin issues
+    const wsHost = typeof window !== "undefined" ? window.location.hostname : "localhost";
+    const wsUrl = `ws://${wsHost}:8080?token=${token}`;
+    console.log("Connecting to WebSocket:", wsUrl);
+    setWsError("");
+
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("Failed to create WebSocket:", msg);
+      setWsError(`Failed to connect: ${msg}`);
+      scheduleReconnect();
+      return;
+    }
     wsRef.current = ws;
 
     ws.onopen = () => {
       console.log("WebSocket connected");
       setIsConnected(true);
+      reconnectAttemptsRef.current = 0;
     };
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      console.log("Received message:", data);
 
       switch (data.type) {
         case "welcome":
-          console.log("Welcome message:", data.message);
+          // Auto-join room after welcome
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({
+              type: "join-room",
+              roomName: roomId
+            }));
+          }
           break;
         case "response":
           if (data.message === "Room joined successfully") {
             setIsJoined(true);
-            // Set admin status from backend response
             if (data.isAdmin !== undefined) {
               setIsRoomAdmin(data.isAdmin);
-              console.log("Admin status set:", data.isAdmin);
             }
-            // Handle chat history from room joining
             if (data.chatHistory && Array.isArray(data.chatHistory)) {
               const historyMessages = data.chatHistory.map((msg: any) => ({
                 id: msg.id,
@@ -444,14 +380,11 @@ export default function CanvasRoomPage() {
                 timestamp: msg.createdAt
               }));
               setMessages(historyMessages);
-              console.log("Loaded chat history:", historyMessages.length, "messages");
             }
-            // fetchDrawingHistory will be called by useEffect when context is ready
           }
           break;
         case "user-joined":
           setConnectedUsers(prev => {
-            // Check if user already exists
             const userExists = prev.some(u => u.id === data.user.id);
             if (!userExists) {
               return [...prev, data.user];
@@ -475,25 +408,21 @@ export default function CanvasRoomPage() {
           handleRemoteClearMessages();
           break;
         case "room-users":
-          // Filter out duplicates when setting room users
-          const uniqueUsers = data.users.filter((user: User, index: number, self: User[]) => 
-            index === self.findIndex(u => u.id === user.id)
+          const uniqueUsers = data.users.filter((u: User, i: number, self: User[]) =>
+            i === self.findIndex(x => x.id === u.id)
           );
           setConnectedUsers(uniqueUsers);
           break;
         case "message":
-          // Handle incoming chat messages
-          const newMessage = {
+          setMessages(prev => [...prev, {
             id: data.messageId || Date.now().toString(),
             text: data.message,
             userId: data.userId,
             userName: data.userName,
             timestamp: data.timestamp
-          };
-          setMessages(prev => [...prev, newMessage]);
+          }]);
           break;
         case "chat-history":
-          // Handle chat history from room joining
           if (data.messages && Array.isArray(data.messages)) {
             const historyMessages = data.messages.map((msg: any) => ({
               id: msg.id,
@@ -506,10 +435,8 @@ export default function CanvasRoomPage() {
           }
           break;
         case "error":
-          alert(`Error: ${data.message}`);
+          console.error("WS error:", data.message);
           break;
-        default:
-          console.log("Unknown message type:", data.type);
       }
     };
 
@@ -517,13 +444,49 @@ export default function CanvasRoomPage() {
       console.log("WebSocket disconnected");
       setIsConnected(false);
       setIsJoined(false);
+      scheduleReconnect();
     };
 
-    ws.onerror = (error) => {
-      console.error("WebSocket error:", error);
-      setIsConnected(false);
+    ws.onerror = () => {
+      console.error("WebSocket error — target URL:", wsUrl);
+      setWsError(`Cannot reach ws://${typeof window !== "undefined" ? window.location.hostname : "localhost"}:8080`);
     };
-  };
+  }, [token, roomId]);
+
+  const scheduleReconnect = useCallback(() => {
+    if (reconnectTimerRef.current) return; // already scheduled
+    const attempts = reconnectAttemptsRef.current;
+    if (attempts >= 10) {
+      console.log("Max reconnect attempts reached");
+      return;
+    }
+    const delay = Math.min(1000 * Math.pow(2, attempts), 10000); // 1s, 2s, 4s... up to 10s
+    console.log(`Reconnecting in ${delay}ms (attempt ${attempts + 1})`);
+    reconnectAttemptsRef.current = attempts + 1;
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectTimerRef.current = null;
+      connectWebSocket();
+    }, delay);
+  }, [connectWebSocket]);
+
+  // Reconnect on visibility change (phone locks/unlocks, tab switch)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && !wsRef.current?.OPEN) {
+        // Check if actually disconnected
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+          console.log("Page became visible, reconnecting...");
+          reconnectAttemptsRef.current = 0;
+          connectWebSocket();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, [connectWebSocket]);
 
   // Join room
   const joinRoom = () => {
@@ -551,194 +514,72 @@ export default function CanvasRoomPage() {
     }, 500);
   };
 
-  // Connect to WebSocket when token is available
+  // Connect to WebSocket once when token becomes available
+  const hasConnectedRef = useRef(false);
   useEffect(() => {
-    if (token && !isConnected) {
-      // Check if there's already a WebSocket connection from canvas page
-      const existingWs = (window as any).__wsConnection;
-      if (existingWs && existingWs.readyState === WebSocket.OPEN) {
-        console.log("Using existing WebSocket connection");
-        wsRef.current = existingWs;
-        setIsConnected(true);
-        
-        // Set up message handler for existing connection
-        const handleMessage = (event: MessageEvent) => {
-          const data = JSON.parse(event.data);
-          console.log("Received message in room page:", data);
-
-          switch (data.type) {
-            case "welcome":
-              console.log("Welcome message:", data.message);
-              break;
-            case "response":
-              if (data.message === "Room joined successfully") {
-                setIsJoined(true);
-                // Set admin status from backend response
-                if (data.isAdmin !== undefined) {
-                  setIsRoomAdmin(data.isAdmin);
-                  console.log("Admin status set:", data.isAdmin);
-                }
-                // Handle chat history from room joining
-                if (data.chatHistory && Array.isArray(data.chatHistory)) {
-                  const historyMessages = data.chatHistory.map((msg: any) => ({
-                    id: msg.id,
-                    text: msg.message,
-                    userId: msg.user.id,
-                    userName: msg.user.name,
-                    timestamp: msg.createdAt
-                  }));
-                  setMessages(historyMessages);
-                  console.log("Loaded chat history:", historyMessages.length, "messages");
-                }
-                // fetchDrawingHistory will be called by useEffect when context is ready
-              }
-              break;
-            case "user-joined":
-              setConnectedUsers(prev => {
-                // Check if user already exists
-                const userExists = prev.some(u => u.id === data.user.id);
-                if (!userExists) {
-                  return [...prev, data.user];
-                }
-                return prev;
-              });
-              break;
-            case "user-left":
-              setConnectedUsers(prev => prev.filter(u => u.id !== data.userId));
-              break;
-            case "drawing-action":
-              handleRemoteDrawing(data.action);
-              break;
-            case "clear-canvas":
-              handleRemoteClearCanvas();
-              break;
-            case "clear-all":
-              handleRemoteClearAll();
-              break;
-            case "clear-messages":
-              handleRemoteClearMessages();
-              break;
-            case "room-users":
-              setConnectedUsers(data.users);
-              break;
-            case "message":
-              // Handle incoming chat messages
-              const newMessage = {
-                id: data.messageId || Date.now().toString(),
-                text: data.message,
-                userId: data.userId,
-                userName: data.userName,
-                timestamp: data.timestamp
-              };
-              setMessages(prev => [...prev, newMessage]);
-              break;
-            case "chat-history":
-              // Handle chat history from room joining
-              if (data.messages && Array.isArray(data.messages)) {
-                const historyMessages = data.messages.map((msg: any) => ({
-                  id: msg.id,
-                  text: msg.message,
-                  userId: msg.user.id,
-                  userName: msg.user.name,
-                  timestamp: msg.createdAt
-                }));
-                setMessages(historyMessages);
-              }
-              break;
-            case "error":
-              alert(`Error: ${data.message}`);
-              break;
-            default:
-              console.log("Unknown message type:", data.type);
-          }
-        };
-
-        existingWs.addEventListener('message', handleMessage);
-        
-        // Remove the global reference
-        delete (window as any).__wsConnection;
-        
-        // If we don't get a join response within 3 seconds, assume we're already joined
-        setTimeout(() => {
-          if (!isJoined) {
-            console.log("No join response received, assuming already joined");
-            setIsJoined(true);
-          }
-        }, 3000);
-      } else {
-        connectWebSocket();
-      }
+    if (token && !hasConnectedRef.current) {
+      hasConnectedRef.current = true;
+      connectWebSocket();
     }
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.onclose = null; // prevent reconnect on intentional unmount
+        wsRef.current.close();
+      }
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
   }, [token]);
-
-  // Auto-rejoin room on page refresh
-  useEffect(() => {
-    if (isConnected && !isJoined) {
-      // Check if we're using an existing connection that was already joined
-      const existingWs = (window as any).__wsConnection;
-      if (!existingWs) {
-        // Auto-join the room after a short delay to ensure connection is stable
-        const autoJoinTimer = setTimeout(() => {
-          console.log("Auto-joining room:", roomId);
-          joinRoom();
-        }, 1000);
-
-        return () => clearTimeout(autoJoinTimer);
-      }
-    }
-  }, [isConnected, isJoined, roomId]);
-
-  // Join room when connected (only if not using existing connection)
-  useEffect(() => {
-    if (isConnected && !isJoined) {
-      // Check if we're using an existing connection that was already joined
-      const existingWs = (window as any).__wsConnection;
-      if (!existingWs) {
-        // Only join if we created a new connection
-        joinRoom();
-      }
-    }
-  }, [isConnected]);
 
   const handleRemoteDrawing = (action: DrawingAction) => {
     const context = contextRef.current;
-    if (!context) {
-      console.log("No canvas context available for remote drawing");
-      return;
-    }
+    if (!context) return;
 
-    console.log("Handling remote drawing:", action);
+    // Save current local drawing state
+    const prevColor = context.strokeStyle;
+    const prevWidth = context.lineWidth;
 
-    // Set drawing properties
     context.strokeStyle = action.color;
     context.lineWidth = action.strokeWidth;
     context.lineCap = "round";
     context.lineJoin = "round";
 
-    if (action.type === "start") {
-      if (action.points && action.points.length > 0) {
-        context.beginPath();
-        context.moveTo(action.points[0].x, action.points[0].y);
-        console.log("Started path at:", action.points[0]);
+    if (action.points && action.points.length >= 2) {
+      // Draw a self-contained path segment — doesn't interfere with local drawing
+      context.beginPath();
+      context.moveTo(action.points[0].x, action.points[0].y);
+      for (let i = 1; i < action.points.length; i++) {
+        context.lineTo(action.points[i].x, action.points[i].y);
       }
-    } else if (action.type === "draw") {
-      if (action.points && action.points.length > 0) {
-        // Draw the complete path
-        context.beginPath();
-        action.points.forEach((point, index) => {
-          if (index === 0) {
-            context.moveTo(point.x, point.y);
-          } else {
-            context.lineTo(point.x, point.y);
-          }
-        });
-        context.stroke();
-        console.log("Drew complete path with", action.points.length, "points");
-      }
-    } else if (action.type === "end") {
-      context.closePath();
-      console.log("Closed path");
+      context.stroke();
     }
+
+    // Restore local drawing state
+    context.strokeStyle = prevColor;
+    context.lineWidth = prevWidth;
+  };
+
+  // Replay a complete stroke (from DB history)
+  const replayStroke = (action: { points: Point[]; color: string; strokeWidth: number }) => {
+    const context = contextRef.current;
+    if (!context || !action.points || action.points.length < 2) return;
+
+    const prevColor = context.strokeStyle;
+    const prevWidth = context.lineWidth;
+
+    context.strokeStyle = action.color;
+    context.lineWidth = action.strokeWidth;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+
+    context.beginPath();
+    context.moveTo(action.points[0].x, action.points[0].y);
+    for (let i = 1; i < action.points.length; i++) {
+      context.lineTo(action.points[i].x, action.points[i].y);
+    }
+    context.stroke();
+
+    context.strokeStyle = prevColor;
+    context.lineWidth = prevWidth;
   };
 
      const handleRemoteClearCanvas = () => {
@@ -767,101 +608,55 @@ export default function CanvasRoomPage() {
    };
 
   const startDrawing = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!contextRef.current || !wsRef.current || !user) return;
+    if (!contextRef.current) return;
 
     setIsDrawing(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    // Convert screen coordinates to canvas coordinates
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const canvasX = x * scaleX;
-    const canvasY = y * scaleY;
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
 
-    // Start a new path and collect points
-    const newPoint = { x: canvasX, y: canvasY };
-    setCurrentPath([newPoint]);
+    currentPathRef.current = [{ x: canvasX, y: canvasY }];
 
     contextRef.current.beginPath();
     contextRef.current.moveTo(canvasX, canvasY);
-
-    // Send drawing start to other users
-    if (wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: "drawing-action",
-        roomName: roomId,
-        action: {
-          type: "start",
-          points: [newPoint],
-          color: currentColor,
-          strokeWidth: strokeWidth,
-          userId: user.id,
-          userName: user.name
-        }
-      }));
-    }
-  }, [currentColor, strokeWidth, user, roomId]);
+  }, []);
 
   const draw = useCallback((event: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing || !contextRef.current || !wsRef.current || !user) return;
+    if (!isDrawing || !contextRef.current) return;
 
     const canvas = canvasRef.current;
     if (!canvas) return;
 
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-
-    // Convert screen coordinates to canvas coordinates
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    const canvasX = x * scaleX;
-    const canvasY = y * scaleY;
+    const canvasX = (event.clientX - rect.left) * scaleX;
+    const canvasY = (event.clientY - rect.top) * scaleY;
 
-    // Add point to current path
-    const newPoint = { x: canvasX, y: canvasY };
-    setCurrentPath(prev => [...prev, newPoint]);
+    currentPathRef.current.push({ x: canvasX, y: canvasY });
 
     contextRef.current.lineTo(canvasX, canvasY);
     contextRef.current.stroke();
-
-    // Send drawing action to other users with all points in the current path
-    if (wsRef.current.readyState === WebSocket.OPEN) {
-      const allPoints = [...currentPath, newPoint];
-      wsRef.current.send(JSON.stringify({
-        type: "drawing-action",
-        roomName: roomId,
-        action: {
-          type: "draw",
-          points: allPoints,
-          color: currentColor,
-          strokeWidth: strokeWidth,
-          userId: user.id,
-          userName: user.name
-        }
-      }));
-    }
-  }, [isDrawing, currentColor, strokeWidth, user, roomId, currentPath]);
+  }, [isDrawing]);
 
   const stopDrawing = useCallback(() => {
-    if (!contextRef.current || !wsRef.current || !user) return;
-
+    if (!isDrawing) return;
     setIsDrawing(false);
-    contextRef.current.closePath();
 
-    // Send drawing end to other users with the complete path
-    if (wsRef.current.readyState === WebSocket.OPEN) {
+    // Send the complete stroke to other users (and DB)
+    const path = currentPathRef.current;
+    if (wsRef.current?.readyState === WebSocket.OPEN && path.length > 1 && user) {
       wsRef.current.send(JSON.stringify({
         type: "drawing-action",
         roomName: roomId,
         action: {
           type: "end",
-          points: currentPath,
+          points: path,
           color: currentColor,
           strokeWidth: strokeWidth,
           userId: user.id,
@@ -870,9 +665,50 @@ export default function CanvasRoomPage() {
       }));
     }
 
-    // Clear the current path
-    setCurrentPath([]);
-  }, [currentColor, strokeWidth, user, roomId, currentPath]);
+    currentPathRef.current = [];
+  }, [isDrawing, currentColor, strokeWidth, user, roomId]);
+
+  // Touch event handlers
+  const getCanvasPoint = (clientX: number, clientY: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  };
+
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!contextRef.current) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const point = getCanvasPoint(touch.clientX, touch.clientY);
+    if (!point) return;
+
+    setIsDrawing(true);
+    currentPathRef.current = [point];
+    contextRef.current.beginPath();
+    contextRef.current.moveTo(point.x, point.y);
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isDrawing || !contextRef.current) return;
+    const touch = e.touches[0];
+    if (!touch) return;
+    const point = getCanvasPoint(touch.clientX, touch.clientY);
+    if (!point) return;
+
+    currentPathRef.current.push(point);
+    contextRef.current.lineTo(point.x, point.y);
+    contextRef.current.stroke();
+  }, [isDrawing]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    stopDrawing();
+  }, [stopDrawing]);
 
   const clearCanvas = () => {
     const canvas = canvasRef.current;
@@ -917,6 +753,27 @@ export default function CanvasRoomPage() {
     setChatInput("");
   };
 
+  const leaveRoom = () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: "leave-room",
+        roomName: roomId
+      }));
+      wsRef.current.onclose = null; // prevent reconnect
+      wsRef.current.close();
+    }
+    localStorage.removeItem("currentRoom");
+    localStorage.removeItem("inRoom");
+    document.cookie = "inRoom=; path=/; max-age=0";
+    window.location.href = "/canvas";
+  };
+
+  // Mark that user is in a room (cookie for middleware, localStorage for client)
+  useEffect(() => {
+    localStorage.setItem("inRoom", roomId);
+    document.cookie = `inRoom=${roomId}; path=/; SameSite=Lax`;
+  }, [roomId]);
+
   const fetchChatHistory = () => {
     if (!wsRef.current || !user) return;
 
@@ -960,10 +817,10 @@ export default function CanvasRoomPage() {
   if (loading) {
     return (
       <ProtectedRoute>
-        <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="min-h-screen bg-white flex items-center justify-center">
           <div className="text-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
-            <p className="text-foreground">Loading...</p>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+            <p className="text-gray-900">Loading...</p>
           </div>
         </div>
       </ProtectedRoute>
@@ -972,134 +829,155 @@ export default function CanvasRoomPage() {
 
   return (
     <ProtectedRoute>
-      <div className="flex flex-col h-screen bg-background">
+      <div className="flex flex-col h-[100dvh] bg-gray-100 overflow-hidden">
         {/* Header */}
-        <div className="bg-card border-b border-border p-4">
+        <div className="bg-white border-b border-gray-200 px-3 py-2 md:px-4 md:py-3 shrink-0">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-xl font-semibold text-foreground">Room: {roomId}</h1>
-              <div className="flex items-center gap-2 mt-1">
-                <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                <span className="text-sm text-muted-foreground">
+            <div className="min-w-0">
+              <h1 className="text-sm md:text-xl font-semibold text-gray-900 truncate">Room: {roomId}</h1>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <div className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                <span className="text-xs text-gray-500">
                   {isConnected ? 'Connected' : 'Disconnected'}
                 </span>
-                {isJoined && (
-                  <>
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    <span className="text-sm text-muted-foreground">Joined</span>
-                  </>
-                )}
               </div>
             </div>
-            
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-muted-foreground">
-                {connectedUsers.length} users online
+
+            <div className="flex items-center gap-2 md:gap-4 shrink-0">
+              {/* Mobile panel toggles */}
+              <button
+                onClick={() => setMobilePanel(mobilePanel === "users" ? "none" : "users")}
+                className="md:hidden px-2 py-1 text-xs border border-gray-300 rounded-md bg-white text-gray-700"
+              >
+                Users ({connectedUsers.length})
+              </button>
+              <button
+                onClick={() => setMobilePanel(mobilePanel === "chat" ? "none" : "chat")}
+                className="md:hidden px-2 py-1 text-xs border border-gray-300 rounded-md bg-white text-gray-700"
+              >
+                Chat
+              </button>
+
+              <span className="hidden md:inline text-sm text-gray-500">
+                {connectedUsers.length} online
               </span>
               <button
+                onClick={leaveRoom}
+                className="px-2 py-1 text-xs md:px-3 md:text-sm bg-gray-700 text-white rounded-md hover:bg-gray-800 transition-colors"
+              >
+                Leave
+              </button>
+              <button
                 onClick={clearCanvas}
-                className="px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors"
+                className="px-2 py-1 text-xs md:px-3 md:text-sm bg-red-500 text-white rounded-md hover:bg-red-600 transition-colors"
               >
                 Clear
               </button>
-                             <button
-                 onClick={downloadCanvas}
-                 className="px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
-               >
-                 Download
-               </button>
+              <button
+                onClick={downloadCanvas}
+                className="hidden md:inline-block px-3 py-1 text-sm bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors"
+              >
+                Download
+              </button>
               {user && (
-                <div className="text-right">
-                  <div className="text-sm font-medium text-foreground">{user.name}</div>
-                  <div className="text-xs text-muted-foreground">{user.email}</div>
+                <div className="hidden md:block text-right">
+                  <div className="text-sm font-medium text-gray-900">{user.name}</div>
+                  <div className="text-xs text-gray-500">{user.email}</div>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* Canvas */}
-        <div className="flex-1 bg-gray-200 overflow-hidden flex">
-          {/* Connected Users Sidebar */}
-          <div className="w-64 bg-card border-r border-border p-4 overflow-y-auto">
-            <h3 className="text-sm font-semibold  mb-4 text-black">Connected Users</h3>
+        {/* Main area */}
+        <div className="flex-1 overflow-hidden flex relative">
+          {/* Connected Users Sidebar — hidden on mobile, overlay when toggled */}
+          <div className={`
+            ${mobilePanel === "users" ? "absolute inset-0 z-20" : "hidden"}
+            md:relative md:block md:w-64 md:z-auto
+            bg-white border-r border-gray-200 p-4 overflow-y-auto
+          `}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-900">Connected Users</h3>
+              <button onClick={() => setMobilePanel("none")} className="md:hidden text-xs text-gray-500">Close</button>
+            </div>
             <div className="space-y-2">
-              {connectedUsers.map((user) => (
-                <div key={user.id} className="flex items-center space-x-2 p-2 bg-gray-50 rounded-md">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <div>
-                    <div className="text-sm font-medium  text-black">{user.name}</div>
-                    <div className="text-xs text-muted-foreground text-black">{user.email}</div>
+              {connectedUsers.map((u) => (
+                <div key={u.id} className="flex items-center space-x-2 p-2 bg-gray-50 rounded-md">
+                  <div className="w-2 h-2 bg-green-500 rounded-full shrink-0"></div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-gray-900 truncate">{u.name}</div>
+                    <div className="text-xs text-gray-500 truncate">{u.email}</div>
                   </div>
                 </div>
               ))}
               {connectedUsers.length === 0 && (
-                <div className="text-sm text-muted-foreground text-center py-4">
-                  No users connected
-                </div>
+                <div className="text-sm text-gray-500 text-center py-4">No users connected</div>
               )}
             </div>
           </div>
-          
+
           {/* Canvas Area */}
-          <div className="flex-1 bg-white border border-border">
+          <div className="flex-1 bg-white border border-gray-200">
             <canvas
               ref={canvasRef}
               onMouseDown={startDrawing}
               onMouseMove={draw}
               onMouseUp={stopDrawing}
               onMouseLeave={stopDrawing}
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
               className="w-full h-full cursor-crosshair block"
               style={{ touchAction: 'none' }}
             />
           </div>
 
-          {/* Chat Sidebar */}
-          <div className="w-80 bg-card border-l border-border flex flex-col">
-            <div className="p-4 border-b border-border">
-              <h3 className="text-sm font-semibold text-black">Chat</h3>
+          {/* Chat Sidebar — hidden on mobile, overlay when toggled */}
+          <div className={`
+            ${mobilePanel === "chat" ? "absolute inset-0 z-20" : "hidden"}
+            md:relative md:flex md:w-80 md:z-auto
+            bg-white border-l border-gray-200 flex-col
+          `} style={{ display: mobilePanel === "chat" ? "flex" : undefined }}>
+            <div className="p-3 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-gray-900">Chat</h3>
+              <button onClick={() => setMobilePanel("none")} className="md:hidden text-xs text-gray-500">Close</button>
             </div>
-            
-                         {/* Messages */}
-             <div ref={chatContainerRef} className="flex-1 p-4 overflow-y-auto space-y-3">
+
+            <div ref={chatContainerRef} className="flex-1 p-3 overflow-y-auto space-y-3">
               {messages.map((message) => (
                 <div key={message.id} className={`flex flex-col ${message.userId === user?.id ? 'items-end' : 'items-start'}`}>
-                  <div className={`max-w-xs px-3 py-2 rounded-lg ${
-                    message.userId === user?.id 
-                      ? 'bg-blue-500 text-white' 
-                      : 'bg-gray-100 text-black'
+                  <div className={`max-w-[85%] px-3 py-2 rounded-lg ${
+                    message.userId === user?.id
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-gray-100 text-gray-900'
                   }`}>
-                    <div className="text-xs font-medium mb-1">
-                      {message.userName}
-                    </div>
+                    <div className="text-xs font-medium mb-1">{message.userName}</div>
                     <div className="text-sm">{message.text}</div>
                   </div>
-                  <div className="text-xs text-black mt-1">
+                  <div className="text-xs text-gray-500 mt-1">
                     {new Date(message.timestamp).toLocaleTimeString()}
                   </div>
                 </div>
               ))}
               {messages.length === 0 && (
-                <div className="text-sm text-black text-center py-4">
-                  No messages yet. Start the conversation!
-                </div>
+                <div className="text-sm text-gray-500 text-center py-4">No messages yet. Start the conversation!</div>
               )}
             </div>
-            
-            {/* Chat Input */}
-            <div className="p-4 border-t border-border">
+
+            <div className="p-3 border-t border-gray-200">
               <div className="flex space-x-2">
-                                 <input
-                   type="text"
-                   value={chatInput}
-                   onChange={(e) => setChatInput(e.target.value)}
-                   onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
-                   placeholder="Type a message..."
-                   className="flex-1 px-3 py-2 border border-border rounded-md text-sm text-black focus:outline-none focus:ring-2 focus:ring-blue-500"
-                 />
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
+                  placeholder="Type a message..."
+                  className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
                 <button
                   onClick={sendChatMessage}
-                  className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
+                  className="px-3 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors text-sm"
                 >
                   Send
                 </button>
@@ -1109,20 +987,20 @@ export default function CanvasRoomPage() {
         </div>
 
         {/* Drawing Controls Toolbar */}
-        <div className="bg-card border-t border-border p-4">
-          <div className="flex items-center justify-center space-x-8">
-            <div className="flex items-center space-x-2">
-              <label className="text-sm text-foreground">Color:</label>
+        <div className="bg-white border-t border-gray-200 px-3 py-2 md:p-4 shrink-0">
+          <div className="flex items-center justify-center gap-4 md:gap-8">
+            <div className="flex items-center gap-2">
+              <label className="text-xs md:text-sm text-gray-700">Color:</label>
               <input
                 type="color"
                 value={currentColor}
                 onChange={(e) => setCurrentColor(e.target.value)}
-                className="w-8 h-8 border border-border rounded cursor-pointer"
+                className="w-8 h-8 border border-gray-300 rounded cursor-pointer"
               />
             </div>
-            
-            <div className="flex items-center space-x-2">
-              <label className="text-sm text-foreground">Stroke:</label>
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs md:text-sm text-gray-700">Stroke:</label>
               <input
                 type="range"
                 min="1"
@@ -1130,9 +1008,9 @@ export default function CanvasRoomPage() {
                 step="0.5"
                 value={strokeWidth}
                 onChange={(e) => setStrokeWidth(Number(e.target.value))}
-                className="w-20"
+                className="w-16 md:w-20"
               />
-              <span className="text-sm text-muted-foreground w-8">{strokeWidth}</span>
+              <span className="text-xs md:text-sm text-gray-500 w-6">{strokeWidth}</span>
             </div>
           </div>
         </div>
