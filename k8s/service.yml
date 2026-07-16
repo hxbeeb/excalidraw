@@ -9,7 +9,14 @@ spec:
     app: excalidraw
 
   ports:
-  - port: 80
-    targetPort: 3000
+  - name: frontend
+    port: 80
+    targetPort: frontend
+  - name: http-api
+    port: 3000
+    targetPort: http-api
+  - name: websocket
+    port: 8080
+    targetPort: websocket
 
   type: LoadBalancer

@@ -5,7 +5,9 @@ metadata:
   name: excalidraw
 
 spec:
-  replicas: 2
+  # The WebSocket server keeps connection state in memory, so this combined
+  # container must run as a single replica until shared state is introduced.
+  replicas: 1
 
   selector:
     matchLabels:
@@ -25,4 +27,16 @@ spec:
         imagePullPolicy: Always
 
         ports:
-        - containerPort: 3000
+        - name: frontend
+          containerPort: 3002
+        - name: http-api
+          containerPort: 3000
+        - name: websocket
+          containerPort: 8080
+
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: excalidraw-db
+              key: DATABASE_URL
