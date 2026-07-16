@@ -1,0 +1,28 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: excalidraw
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: excalidraw
+
+  template:
+    metadata:
+      labels:
+        app: excalidraw
+
+    spec:
+      containers:
+      - name: excalidraw
+
+        image: hxbeeb/excalidraw:latest
+
+        imagePullPolicy: Always
+
+        ports:
+        - containerPort: 3000
