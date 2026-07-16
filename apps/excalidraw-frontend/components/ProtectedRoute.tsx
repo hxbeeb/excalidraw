@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -10,7 +10,6 @@ interface ProtectedRouteProps {
 export default function ProtectedRoute({ children }: ProtectedRouteProps) {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   useEffect(() => {
     const checkAuth = () => {
@@ -19,8 +18,7 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
 
       if (!token || !user) {
         setIsAuthenticated(false);
-        const redirect = searchParams.get("redirect") || "/";
-        router.push(`/signin?redirect=${encodeURIComponent(redirect)}`);
+        router.push("/signin");
         return;
       }
 
@@ -36,13 +34,12 @@ export default function ProtectedRoute({ children }: ProtectedRouteProps) {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
         setIsAuthenticated(false);
-        const redirect = searchParams.get("redirect") || "/";
-        router.push(`/signin?redirect=${encodeURIComponent(redirect)}`);
+        router.push("/signin");
       }
     };
 
     checkAuth();
-  }, [router, searchParams]);
+  }, [router]);
 
   // Show loading while checking authentication
   if (isAuthenticated === null) {
